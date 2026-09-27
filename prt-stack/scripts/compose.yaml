@@ -1,0 +1,104 @@
+# prt-stack: devnet chain + PostgreSQL + a PASSIVE reference rollups-node.
+#
+# Honest validators (sling nodes) and fraudulent players (sybils) are started
+# per-run by prt-stack.sh on this project's network, because their count is a
+# runtime choice. Every value below comes from the environment prt-stack.sh
+# derives from the release dump - nothing is hardcoded to a machine.
+#
+# Published ports bind to ${PRT_BIND} (default 127.0.0.1): the chain runs on
+# a public test mnemonic and the database has a fixed password.
+services:
+  anvil:
+    image: ${PRT_SYBIL_IMAGE}
+    entrypoint: ["anvil"]
+    # Same mining model as dave's own e2e harness: transactions automine and
+    # clock blocks are mined explicitly by the driver. No interval mining -
+    # an idle stack must not advance epochs, grow validator snapshots, or
+    # push sealed-epoch events out of the history the reference node needs.
+    # --slots-in-an-epoch 1 finalizes block N-2, so "finalized" reads keep up
+    # with explicit mining. PRT_ANVIL_EXTRA_ARGS may add history retention.
+    command: >-
+      --host 0.0.0.0 --chain-id 31337 --silent --slots-in-an-epoch 1
+      --load-state /devnet/state.json ${PRT_ANVIL_EXTRA_ARGS}
+    volumes:
+      - ${PRT_DUMP_DIR}/state.json:/devnet/state.json:ro
+    ports:
+      - "${PRT_BIND}:${PRT_ANVIL_PORT}:8545"
+    mem_limit: ${PRT_ANVIL_MEM}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -X POST http://127.0.0.1:8545 -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"net_listening\",\"params\":[]}' >/dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  database:
+    # postgres:18-alpine, digest-pinned.
+    image: postgres@sha256:1b1689b20d16a014a3d195653381cf2caa75a41a92d93b255a9d6ea29fd353aa
+    shm_size: 128mb
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: rollupsdb
+    ports:
+      - "${PRT_BIND}:${PRT_PG_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rollupsdb || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  migration:
+    image: ${PRT_NODE_IMAGE}
+    command: cartesi-rollups-cli db init
+    restart: "no"
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      CARTESI_DATABASE_CONNECTION: postgres://postgres:password@database:5432/rollupsdb?sslmode=disable
+
+  node:
+    image: ${PRT_NODE_IMAGE}
+    init: true
+    command: cartesi-rollups-node
+    depends_on:
+      database:
+        condition: service_healthy
+      anvil:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    volumes:
+      - node_data:/var/lib/cartesi-rollups-node/data
+      - ${PRT_APPS_DIR}:/mnt/apps
+    ports:
+      - "${PRT_BIND}:${PRT_NODE_PORT_BASE}:10000"      # supervisor
+      - "${PRT_BIND}:${PRT_NODE_JSONRPC_PORT}:10011"   # POST /rpc
+      - "${PRT_BIND}:${PRT_NODE_INSPECT_PORT}:10012"   # POST /inspect/{app}
+    environment:
+      CARTESI_LOG_LEVEL: info
+      CARTESI_BLOCKCHAIN_HTTP_ENDPOINT: http://anvil:8545
+      CARTESI_BLOCKCHAIN_ID: 31337
+      CARTESI_EVM_READER_POLLING_INTERVAL: 1
+      CARTESI_DATABASE_CONNECTION: postgres://postgres:password@database:5432/rollupsdb?sslmode=disable
+      # Contract addresses are read from the dump's deployment records.
+      CARTESI_CONTRACTS_INPUT_BOX_ADDRESS: ${PRT_ADDR_INPUT_BOX}
+      CARTESI_CONTRACTS_APPLICATION_FACTORY_ADDRESS: ${PRT_ADDR_APPLICATION_FACTORY}
+      CARTESI_CONTRACTS_AUTHORITY_FACTORY_ADDRESS: ${PRT_ADDR_AUTHORITY_FACTORY}
+      CARTESI_CONTRACTS_QUORUM_FACTORY_ADDRESS: ${PRT_ADDR_QUORUM_FACTORY}
+      CARTESI_CONTRACTS_SELF_HOSTED_APPLICATION_FACTORY_ADDRESS: ${PRT_ADDR_SELF_HOSTED_APPLICATION_FACTORY}
+      CARTESI_CONTRACTS_DAVE_APP_FACTORY_ADDRESS: ${PRT_ADDR_DAVE_APP_FACTORY}
+      CARTESI_DEVNET_WITHDRAWAL_OUTPUT_BUILDER_ADDRESS: ${PRT_ADDR_WITHDRAWAL_OUTPUT_BUILDER}
+      # Anvil's default mnemonic. Account 0 deploys/claims; account 6 is the
+      # node's PRT signer slot. Both stay idle: this node is PASSIVE.
+      CARTESI_AUTH_MNEMONIC: ${PRT_MNEMONIC}
+      CARTESI_AUTH_MNEMONIC_ACCOUNT_INDEX: 0
+      CARTESI_PRT_AUTH_MNEMONIC: ${PRT_MNEMONIC}
+      CARTESI_PRT_AUTH_MNEMONIC_ACCOUNT_INDEX: 6
+      # Passive: execute inputs and serve the API, but never join a tournament.
+      # Two honest validators compute the same commitment, so a submitting
+      # reference node would take the tournament slot and the sling nodes
+      # would idle forever. The sling nodes are the validators here.
+      CARTESI_FEATURE_CLAIM_SUBMISSION_ENABLED: "false"
+
+volumes:
+  node_data:

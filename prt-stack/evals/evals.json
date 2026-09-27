@@ -1,0 +1,46 @@
+{
+  "skill_name": "prt-stack",
+  "evals": [
+    {
+      "id": 1,
+      "name": "contested-dispute-with-silent-sybil",
+      "prompt": "I want to test Dave's dispute resolution locally. Spin up the rollups node and one honest dave sling node against a devnet, deploy the echo test app, and then throw two fraudulent validators at it - make one of them go silent so I can see the timeout path too. Tell me who won and whether the epoch settled.",
+      "expected_output": "The skill's `all 1 2 1` (or up/deploy/sling 1/dispute 2 1) is run and exits 0. Evidence is the skill's own asserted output, not ad-hoc commands: the sybil report shows PASS for 'winner is the honest commitment', 'sybil 1 eliminated on chain', 'sybil 2 eliminated on chain', 'silent sybil 2 eliminated by timeout', and RESULT PASS; the dispute line reports the reference node at CLAIM_ACCEPTED with 0 BlockOutOfRangeError; the honest node highlights include 'settle epoch 1' and 'epoch 1 complete: settlement and bonds finalized'. The answer names the winner (the honest root), says both sybils lost, that the silent one's match died by timeout, and that the epoch settled.",
+      "assertions": [
+        "the response shows the skill's dispute output containing 'RESULT         PASS' (or the JSON report with ok=true) for a run with N_SYBILS=2, N_SILENT=1",
+        "the report contains a MatchDeleted with reason=timeout and the check 'silent sybil 2 eliminated by timeout' passed",
+        "the dispute summary line shows the reference node epoch status CLAIM_ACCEPTED and BlockOutOfRangeError count 0",
+        "the honest node's 'epoch 1 complete: settlement and bonds finalized' line is shown",
+        "the response states the honest commitment won and both fraudulent players were eliminated",
+        "no tool other than bash/docker/curl/git was required on the host"
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "alternate-ports-three-honest-nodes",
+      "prompt": "port 8545 is already used on this box by another anvil. bring up the PRT test stack on different ports with 3 sling nodes and no adversaries for now, I just want to see whether extra honest validators do anything.",
+      "expected_output": "Stack started with PRT_ANVIL_PORT (and PRT_PG_PORT / PRT_NODE_PORT_BASE as needed) overridden; `sling 3` starts three prt-sling containers, each waited for its 'Running with config' marker, with distinct state dirs and signers (accounts 7, 8, 9); the skill prints its note that honest nodes compute identical commitments and only one holds the slot. The explanation is backed by the nodes' logs (one joins, the others idle) and by the topology reference, not by guesswork.",
+      "assertions": [
+        "the stack was started with a non-default PRT_ANVIL_PORT and the skill reported the chain on that port",
+        "three containers <project>-sling-1..3 are running, each with its own state dir and signer account 7, 8, 9",
+        "the response explains that only one honest node joins the tournament because honest commitments are identical, citing the node logs or the skill's own note",
+        "the response does not claim that three honest nodes produce a dispute"
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "custom-app-single-sybil-and-timing",
+      "prompt": "I have my own Cartesi app machine at ./my-app (built with cartesi-machine --store). Deploy it with PRT consensus on the local stack and run a single contested dispute against it. Also, why would this take a week on mainnet but not here?",
+      "expected_output": "`deploy --app ./my-app` is used; the skill stages the machine under apps/<stored hash> (computed by the emulator the nodes run) and checks the on-chain getTemplateHash equals it, refusing an incompatible machine with a clear message; `sling 1` then `dispute 1` exits 0 with RESULT PASS and the reference node at CLAIM_ACCEPTED. The explanation states that PRT clocks are block-denominated (block.number), that the devnet chain kind yields a 300-block root allowance and 25-block response budget which the driver mines through explicitly, versus mainnet's 1 week + 1 hour registered in dave's deployment script; and that shrinking clocks further is a contracts redeploy while the tree geometry is asserted by the node.",
+      "assertions": [
+        "deploy was invoked with --app and the output shows the staged stored hash matching the on-chain template hash (or a clear refusal if the machine is incompatible)",
+        "a dispute with 1 sybil ran through the skill and its output shows 'RESULT         PASS' and 'dispute N: PASS'",
+        "the timing explanation mentions block-denominated clocks, the 300-block devnet allowance, and the 1 week + 1 hour mainnet chain-kind value",
+        "the response distinguishes the free dial (clock constructor args, redeploy) from the expensive one (tree geometry asserted by the node)"
+      ],
+      "files": []
+    }
+  ]
+}

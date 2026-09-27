@@ -1,0 +1,4 @@
+# Runtime workspace created next to wherever the scripts are run from.
+prt-stack-workspace*/
+*.skill
+.DS_Store
